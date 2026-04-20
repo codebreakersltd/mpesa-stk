@@ -9,6 +9,19 @@ const cors = require('cors');
 const axios = require('axios');
 const path = require('path');
 
+// 🔥 FIREBASE ADMIN (UPDATED FOR RENDER - NO JSON FILE)
+const admin = require("firebase-admin");
+
+admin.initializeApp({
+  credential: admin.credential.cert({
+    projectId: process.env.FIREBASE_PROJECT_ID,
+    clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+    privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n')
+  })
+});
+
+const db = admin.firestore();
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -54,7 +67,6 @@ app.post('/stkpush', async (req, res) => {
   let { phone, amount } = req.body;
 
   try {
-    // FIX PHONE FORMAT (07XXXXXXXX -> 2547XXXXXXXX)
     if (phone.startsWith('0')) {
       phone = '254' + phone.slice(1);
     }
@@ -116,14 +128,39 @@ app.post('/stkpush', async (req, res) => {
 // =======================
 // CALLBACK / WEBHOOK
 // =======================
-app.post('/callback', (req, res) => {
+app.post('/callback', async (req, res) => {
   console.log('=== STK CALLBACK RECEIVED ===');
   console.log(JSON.stringify(req.body, null, 2));
 
-  res.json({
-    ResultCode: 0,
-    ResultDesc: 'Accepted'
-  });
+  try {
+    const callback = req.body.Body.stkCallback;
+
+    if (callback.ResultCode === 0) {
+
+      const items = callback.CallbackMetadata.Item;
+
+      const phone = items.find(i => i.Name === "PhoneNumber").Value;
+
+      console.log("✅ PAID PHONE:", phone);
+
+      await db.collection("members")
+        .doc(phone.toString())
+        .update({ status: "ACTIVE" });
+
+      console.log("🔥 Firestore updated to ACTIVE");
+
+    } else {
+      console.log("❌ Payment failed:", callback.ResultDesc);
+    }
+
+    res.json({
+      ResultCode: 0,
+      ResultDesc: 'Accepted'
+    });
+
+  } catch (error) {
+    console.error("❌ CALLBACK ERROR:", error);
+  }
 });
 
 // =======================
