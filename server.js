@@ -32,13 +32,8 @@ app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// serve frontend (index.html, css, js)
+// serve frontend (static files if any)
 app.use(express.static(path.join(__dirname)));
-
-// homepage
-app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, '/web/index.html'));
-});
 
 // =======================
 // GET ACCESS TOKEN
