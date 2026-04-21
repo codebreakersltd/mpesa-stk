@@ -54,7 +54,7 @@ async function getToken() {
 }
 
 // =======================
-// STK PUSH ROUTE (UPDATED)
+// STK PUSH ROUTE
 // =======================
 app.post('/stkpush', async (req, res) => {
   let { phone, amount, paymentType, referenceId } = req.body;
@@ -109,10 +109,10 @@ app.post('/stkpush', async (req, res) => {
       }
     });
 
-    // 🔥 STORE STK REQUEST
     const responseData = response.data;
     const checkoutId = responseData.CheckoutRequestID;
 
+    // 🔥 store STK request
     await db.collection("stk_requests").doc(checkoutId).set({
       phone,
       amount,
@@ -143,17 +143,23 @@ app.post('/stkpush', async (req, res) => {
 });
 
 // =======================
-// CALLBACK (UPDATED)
+// CALLBACK
 // =======================
 app.post('/callback', async (req, res) => {
-  console.log('=== STK CALLBACK RECEIVED ===');
-  console.log(JSON.stringify(req.body, null, 2));
 
   try {
-    const callback = req.body.Body.stkCallback;
+    console.log('=== STK CALLBACK RECEIVED ===');
+    console.log(JSON.stringify(req.body, null, 2));
+
+    const callback = req.body?.Body?.stkCallback;
+
+    if (!callback) {
+      console.log("❌ Invalid callback structure");
+      return res.json({ ResultCode: 0, ResultDesc: "Accepted" });
+    }
+
     const checkoutId = callback.CheckoutRequestID;
 
-    // 🔍 FIND STK REQUEST
     const stkDoc = await db.collection("stk_requests").doc(checkoutId).get();
 
     if (!stkDoc.exists) {
@@ -164,15 +170,18 @@ app.post('/callback', async (req, res) => {
     const { paymentType, referenceId } = stkDoc.data();
 
     // =========================
-    // ✅ SUCCESS PAYMENT
+    // SUCCESS
     // =========================
     if (callback.ResultCode === 0) {
 
-      const items = callback.CallbackMetadata.Item;
+      const items = callback.CallbackMetadata?.Item || [];
 
-      const receipt = items.find(i => i.Name === "MpesaReceiptNumber")?.Value;
-      const phone = items.find(i => i.Name === "PhoneNumber")?.Value;
-      const amount = items.find(i => i.Name === "Amount")?.Value;
+      const getValue = (name) =>
+        items.find(i => i.Name === name)?.Value;
+
+      const receipt = getValue("MpesaReceiptNumber");
+      const phone = getValue("PhoneNumber");
+      const amount = getValue("Amount");
 
       console.log("✅ PAYMENT SUCCESS:", paymentType);
 
@@ -190,7 +199,7 @@ app.post('/callback', async (req, res) => {
         console.log("🔥 MEMBERSHIP ACTIVATED:", referenceId);
       }
 
-      // 🔵 JERSEY
+      // 🔵 JERSEY ORDERS
       else if (paymentType === "JERSEY") {
 
         await db.collection("orders")
@@ -198,15 +207,14 @@ app.post('/callback', async (req, res) => {
           .update({
             status: "PAID",
             receipt,
-            phone,
-            amount,
+            phone: phone || "",
+            amount: amount || 0,
             paidAt: admin.firestore.FieldValue.serverTimestamp()
           });
 
         console.log("🔥 ORDER PAID:", referenceId);
       }
 
-      // Update STK request
       await db.collection("stk_requests")
         .doc(checkoutId)
         .update({ status: "SUCCESS" });
@@ -214,7 +222,7 @@ app.post('/callback', async (req, res) => {
     }
 
     // =========================
-    // ❌ FAILED PAYMENT
+    // FAILED
     // =========================
     else {
 
