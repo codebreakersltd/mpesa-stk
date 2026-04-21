@@ -9,7 +9,7 @@ const cors = require('cors');
 const axios = require('axios');
 const path = require('path');
 
-// 🔥 FIREBASE ADMIN (UPDATED FOR RENDER - NO JSON FILE)
+// 🔥 FIREBASE ADMIN
 const admin = require("firebase-admin");
 
 admin.initializeApp({
@@ -31,8 +31,6 @@ const PORT = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-
-// serve frontend (static files if any)
 app.use(express.static(path.join(__dirname)));
 
 // =======================
@@ -56,12 +54,20 @@ async function getToken() {
 }
 
 // =======================
-// STK PUSH ROUTE
+// STK PUSH ROUTE (UPDATED)
 // =======================
 app.post('/stkpush', async (req, res) => {
-  let { phone, amount } = req.body;
+  let { phone, amount, paymentType, referenceId } = req.body;
 
   try {
+    if (!phone || !amount || !paymentType || !referenceId) {
+      return res.status(400).json({
+        success: false,
+        message: "Missing required fields"
+      });
+    }
+
+    // Normalize phone
     if (phone.startsWith('0')) {
       phone = '254' + phone.slice(1);
     }
@@ -92,8 +98,8 @@ app.post('/stkpush', async (req, res) => {
       PartyB: process.env.BUSINESS_SHORTCODE,
       PhoneNumber: phone,
       CallBackURL: process.env.CALLBACK_URL,
-      AccountReference: 'TestPayment',
-      TransactionDesc: 'STK Push Sandbox Test'
+      AccountReference: paymentType, // 👈 shows MEMBERSHIP or JERSEY
+      TransactionDesc: `${paymentType} Payment`
     };
 
     const response = await axios.post(stkUrl, payload, {
@@ -103,10 +109,26 @@ app.post('/stkpush', async (req, res) => {
       }
     });
 
+    // 🔥 NEW: STORE STK REQUEST MAPPING
+    const responseData = response.data;
+    const checkoutId = responseData.CheckoutRequestID;
+
+    await db.collection("stk_requests").doc(checkoutId).set({
+      phone,
+      amount,
+      paymentType,
+      referenceId,
+      status: "PENDING",
+      createdAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+
+    console.log("✅ STK REQUEST STORED:", checkoutId);
+
     res.json({
       success: true,
       message: 'STK Push sent successfully',
-      data: response.data
+      checkoutId,
+      data: responseData
     });
 
   } catch (err) {
@@ -121,7 +143,7 @@ app.post('/stkpush', async (req, res) => {
 });
 
 // =======================
-// CALLBACK / WEBHOOK
+// CALLBACK (UNCHANGED FOR NOW)
 // =======================
 app.post('/callback', async (req, res) => {
   console.log('=== STK CALLBACK RECEIVED ===');
