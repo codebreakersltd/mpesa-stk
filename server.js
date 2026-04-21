@@ -98,7 +98,7 @@ app.post('/stkpush', async (req, res) => {
       PartyB: process.env.BUSINESS_SHORTCODE,
       PhoneNumber: phone,
       CallBackURL: process.env.CALLBACK_URL,
-      AccountReference: paymentType, // 👈 shows MEMBERSHIP or JERSEY
+      AccountReference: paymentType,
       TransactionDesc: `${paymentType} Payment`
     };
 
@@ -109,7 +109,7 @@ app.post('/stkpush', async (req, res) => {
       }
     });
 
-    // 🔥 NEW: STORE STK REQUEST MAPPING
+    // 🔥 STORE STK REQUEST
     const responseData = response.data;
     const checkoutId = responseData.CheckoutRequestID;
 
@@ -143,7 +143,7 @@ app.post('/stkpush', async (req, res) => {
 });
 
 // =======================
-// CALLBACK (UNCHANGED FOR NOW)
+// CALLBACK (UPDATED)
 // =======================
 app.post('/callback', async (req, res) => {
   console.log('=== STK CALLBACK RECEIVED ===');
@@ -151,23 +151,84 @@ app.post('/callback', async (req, res) => {
 
   try {
     const callback = req.body.Body.stkCallback;
+    const checkoutId = callback.CheckoutRequestID;
 
+    // 🔍 FIND STK REQUEST
+    const stkDoc = await db.collection("stk_requests").doc(checkoutId).get();
+
+    if (!stkDoc.exists) {
+      console.log("❌ Unknown transaction:", checkoutId);
+      return res.json({ ResultCode: 0, ResultDesc: "Accepted" });
+    }
+
+    const { paymentType, referenceId } = stkDoc.data();
+
+    // =========================
+    // ✅ SUCCESS PAYMENT
+    // =========================
     if (callback.ResultCode === 0) {
 
       const items = callback.CallbackMetadata.Item;
 
-      const phone = items.find(i => i.Name === "PhoneNumber").Value;
+      const receipt = items.find(i => i.Name === "MpesaReceiptNumber")?.Value;
+      const phone = items.find(i => i.Name === "PhoneNumber")?.Value;
+      const amount = items.find(i => i.Name === "Amount")?.Value;
 
-      console.log("✅ PAID PHONE:", phone);
+      console.log("✅ PAYMENT SUCCESS:", paymentType);
 
-      await db.collection("members")
-        .doc(phone.toString())
-        .update({ status: "ACTIVE" });
+      // 🟢 MEMBERSHIP
+      if (paymentType === "MEMBERSHIP") {
 
-      console.log("🔥 Firestore updated to ACTIVE");
+        await db.collection("members")
+          .doc(referenceId)
+          .update({
+            status: "ACTIVE",
+            receipt,
+            paidAt: admin.firestore.FieldValue.serverTimestamp()
+          });
 
-    } else {
-      console.log("❌ Payment failed:", callback.ResultDesc);
+        console.log("🔥 MEMBERSHIP ACTIVATED:", referenceId);
+      }
+
+      // 🔵 JERSEY
+      else if (paymentType === "JERSEY") {
+
+        await db.collection("orders")
+          .doc(referenceId)
+          .update({
+            status: "PAID",
+            receipt,
+            phone,
+            amount,
+            paidAt: admin.firestore.FieldValue.serverTimestamp()
+          });
+
+        console.log("🔥 ORDER PAID:", referenceId);
+      }
+
+      // Update STK request
+      await db.collection("stk_requests")
+        .doc(checkoutId)
+        .update({ status: "SUCCESS" });
+
+    }
+
+    // =========================
+    // ❌ FAILED PAYMENT
+    // =========================
+    else {
+
+      console.log("❌ PAYMENT FAILED:", callback.ResultDesc);
+
+      await db.collection("stk_requests")
+        .doc(checkoutId)
+        .update({ status: "FAILED" });
+
+      if (paymentType === "JERSEY") {
+        await db.collection("orders")
+          .doc(referenceId)
+          .update({ status: "FAILED" });
+      }
     }
 
     res.json({
@@ -177,6 +238,7 @@ app.post('/callback', async (req, res) => {
 
   } catch (error) {
     console.error("❌ CALLBACK ERROR:", error);
+    res.json({ ResultCode: 0, ResultDesc: "Accepted" });
   }
 });
 
