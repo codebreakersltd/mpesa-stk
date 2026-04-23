@@ -57,9 +57,11 @@ async function getToken() {
 // STK PUSH ROUTE
 // =======================
 app.post('/stkpush', async (req, res) => {
+
   let { phone, amount, paymentType, referenceId } = req.body;
 
   try {
+
     if (!phone || !amount || !paymentType || !referenceId) {
       return res.status(400).json({
         success: false,
@@ -98,6 +100,8 @@ app.post('/stkpush', async (req, res) => {
       PartyB: process.env.BUSINESS_SHORTCODE,
       PhoneNumber: phone,
       CallBackURL: process.env.CALLBACK_URL,
+
+      // ⚠️ IMPORTANT: this helps identify ticket payments
       AccountReference: paymentType,
       TransactionDesc: `${paymentType} Payment`
     };
@@ -132,6 +136,7 @@ app.post('/stkpush', async (req, res) => {
     });
 
   } catch (err) {
+
     console.log('STK ERROR:', err.response?.data || err.message);
 
     res.status(500).json({
@@ -148,19 +153,20 @@ app.post('/stkpush', async (req, res) => {
 app.post('/callback', async (req, res) => {
 
   try {
+
     console.log('=== STK CALLBACK RECEIVED ===');
     console.log(JSON.stringify(req.body, null, 2));
 
     const callback = req.body?.Body?.stkCallback;
 
     if (!callback) {
-      console.log("❌ Invalid callback structure");
       return res.json({ ResultCode: 0, ResultDesc: "Accepted" });
     }
 
     const checkoutId = callback.CheckoutRequestID;
 
-    const stkDoc = await db.collection("stk_requests").doc(checkoutId).get();
+    const stkDocRef = db.collection("stk_requests").doc(checkoutId);
+    const stkDoc = await stkDocRef.get();
 
     if (!stkDoc.exists) {
       console.log("❌ Unknown transaction:", checkoutId);
@@ -185,40 +191,52 @@ app.post('/callback', async (req, res) => {
 
       console.log("✅ PAYMENT SUCCESS:", paymentType);
 
+      const updateDoc = async (collection, docId, data) => {
+        const ref = db.collection(collection).doc(docId);
+        const doc = await ref.get();
+
+        if (doc.exists) {
+          await ref.update(data);
+        } else {
+          console.log(`⚠️ Missing document in ${collection}:`, docId);
+        }
+      };
+
       // 🟢 MEMBERSHIP
       if (paymentType === "MEMBERSHIP") {
-
-        await db.collection("members")
-          .doc(referenceId)
-          .update({
-            status: "ACTIVE",
-            receipt,
-            paidAt: admin.firestore.FieldValue.serverTimestamp()
-          });
-
-        console.log("🔥 MEMBERSHIP ACTIVATED:", referenceId);
+        await updateDoc("members", referenceId, {
+          status: "ACTIVE",
+          receipt,
+          paidAt: admin.firestore.FieldValue.serverTimestamp()
+        });
       }
 
-      // 🔵 JERSEY ORDERS
+      // 🔵 JERSEY
       else if (paymentType === "JERSEY") {
-
-        await db.collection("orders")
-          .doc(referenceId)
-          .update({
-            status: "PAID",
-            receipt,
-            phone: phone || "",
-            amount: amount || 0,
-            paidAt: admin.firestore.FieldValue.serverTimestamp()
-          });
-
-        console.log("🔥 ORDER PAID:", referenceId);
+        await updateDoc("orders", referenceId, {
+          status: "PAID",
+          receipt,
+          phone: phone || "",
+          amount: amount || 0,
+          paidAt: admin.firestore.FieldValue.serverTimestamp()
+        });
       }
 
-      await db.collection("stk_requests")
-        .doc(checkoutId)
-        .update({ status: "SUCCESS" });
+      // 🟡 TICKET (🔥 IMPORTANT FIXED FLOW)
+      else if (paymentType === "TICKET") {
 
+        await updateDoc("tickets", referenceId, {
+          status: "PAID",
+          receipt,
+          phone: phone || "",
+          amount: amount || 0,
+          paidAt: admin.firestore.FieldValue.serverTimestamp()
+        });
+
+        console.log("🎟️ TICKET UPDATED TO PAID:", referenceId);
+      }
+
+      await stkDocRef.update({ status: "SUCCESS" });
     }
 
     // =========================
@@ -228,14 +246,25 @@ app.post('/callback', async (req, res) => {
 
       console.log("❌ PAYMENT FAILED:", callback.ResultDesc);
 
-      await db.collection("stk_requests")
-        .doc(checkoutId)
-        .update({ status: "FAILED" });
+      await stkDocRef.update({ status: "FAILED" });
+
+      const { paymentType, referenceId } = stkDoc.data();
+
+      const updateDoc = async (collection, docId, data) => {
+        const ref = db.collection(collection).doc(docId);
+        const doc = await ref.get();
+
+        if (doc.exists) {
+          await ref.update(data);
+        }
+      };
 
       if (paymentType === "JERSEY") {
-        await db.collection("orders")
-          .doc(referenceId)
-          .update({ status: "FAILED" });
+        await updateDoc("orders", referenceId, { status: "FAILED" });
+      }
+
+      if (paymentType === "TICKET") {
+        await updateDoc("tickets", referenceId, { status: "FAILED" });
       }
     }
 
