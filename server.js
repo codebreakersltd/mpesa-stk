@@ -100,8 +100,6 @@ app.post('/stkpush', async (req, res) => {
       PartyB: process.env.BUSINESS_SHORTCODE,
       PhoneNumber: phone,
       CallBackURL: process.env.CALLBACK_URL,
-
-      // ⚠️ IMPORTANT: this helps identify ticket payments
       AccountReference: paymentType,
       TransactionDesc: `${paymentType} Payment`
     };
@@ -116,7 +114,7 @@ app.post('/stkpush', async (req, res) => {
     const responseData = response.data;
     const checkoutId = responseData.CheckoutRequestID;
 
-    // 🔥 store STK request
+    // 🔥 STORE STK REQUEST (FIX: include phone properly)
     await db.collection("stk_requests").doc(checkoutId).set({
       phone,
       amount,
@@ -173,7 +171,7 @@ app.post('/callback', async (req, res) => {
       return res.json({ ResultCode: 0, ResultDesc: "Accepted" });
     }
 
-    const { paymentType, referenceId } = stkDoc.data();
+    const { paymentType, referenceId, phone } = stkDoc.data();
 
     // =========================
     // SUCCESS
@@ -186,7 +184,6 @@ app.post('/callback', async (req, res) => {
         items.find(i => i.Name === name)?.Value;
 
       const receipt = getValue("MpesaReceiptNumber");
-      const phone = getValue("PhoneNumber");
       const amount = getValue("Amount");
 
       console.log("✅ PAYMENT SUCCESS:", paymentType);
@@ -202,13 +199,16 @@ app.post('/callback', async (req, res) => {
         }
       };
 
-      // 🟢 MEMBERSHIP
+      // 🟢 MEMBERSHIP (FIXED: use phone as document ID)
       if (paymentType === "MEMBERSHIP") {
-        await updateDoc("members", referenceId, {
+
+        await updateDoc("members", phone, {
           status: "ACTIVE",
           receipt,
           paidAt: admin.firestore.FieldValue.serverTimestamp()
         });
+
+        console.log("🟢 MEMBER ACTIVATED:", phone);
       }
 
       // 🔵 JERSEY
@@ -222,7 +222,7 @@ app.post('/callback', async (req, res) => {
         });
       }
 
-      // 🟡 TICKET (🔥 IMPORTANT FIXED FLOW)
+      // 🟡 TICKET
       else if (paymentType === "TICKET") {
 
         await updateDoc("tickets", referenceId, {
