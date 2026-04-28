@@ -58,19 +58,11 @@ async function getToken() {
 // =======================
 app.post('/stkpush', async (req, res) => {
 
-  // FIX: support Android payload naming
-  let {
-    phone,
-    amount,
-    accountReference,
-    transactionDesc,
-    referenceId
-  } = req.body;
+  let { phone, amount, paymentType, referenceId } = req.body;
 
   try {
 
-    // FIX: validation aligned with Android app + backend
-    if (!phone || !amount || !accountReference || !referenceId) {
+    if (!phone || !amount || !paymentType || !referenceId) {
       return res.status(400).json({
         success: false,
         message: "Missing required fields"
@@ -109,9 +101,9 @@ app.post('/stkpush', async (req, res) => {
       PhoneNumber: phone,
       CallBackURL: process.env.CALLBACK_URL,
 
-      // FIX: match Android repo naming
-      AccountReference: accountReference,
-      TransactionDesc: transactionDesc || `${accountReference} Payment`
+      // ⚠️ IMPORTANT: this helps identify ticket payments
+      AccountReference: paymentType,
+      TransactionDesc: `${paymentType} Payment`
     };
 
     const response = await axios.post(stkUrl, payload, {
@@ -124,11 +116,11 @@ app.post('/stkpush', async (req, res) => {
     const responseData = response.data;
     const checkoutId = responseData.CheckoutRequestID;
 
-    // 🔥 store STK request (FIXED mapping)
+    // 🔥 store STK request
     await db.collection("stk_requests").doc(checkoutId).set({
       phone,
       amount,
-      paymentType: accountReference,
+      paymentType,
       referenceId,
       status: "PENDING",
       createdAt: admin.firestore.FieldValue.serverTimestamp()
@@ -210,7 +202,7 @@ app.post('/callback', async (req, res) => {
         }
       };
 
-      // MEMBERSHIP
+      // 🟢 MEMBERSHIP
       if (paymentType === "MEMBERSHIP") {
         await updateDoc("members", referenceId, {
           status: "ACTIVE",
@@ -219,7 +211,7 @@ app.post('/callback', async (req, res) => {
         });
       }
 
-      // JERSEY
+      // 🔵 JERSEY
       else if (paymentType === "JERSEY") {
         await updateDoc("orders", referenceId, {
           status: "PAID",
@@ -230,7 +222,7 @@ app.post('/callback', async (req, res) => {
         });
       }
 
-      // TICKET
+      // 🟡 TICKET (🔥 IMPORTANT FIXED FLOW)
       else if (paymentType === "TICKET") {
 
         await updateDoc("tickets", referenceId, {
