@@ -199,16 +199,15 @@ app.post('/callback', async (req, res) => {
         }
       };
 
-      // 🟢 MEMBERSHIP (FIXED: use phone as document ID)
       if (paymentType === "MEMBERSHIP") {
 
-        await updateDoc("members", phone, {
+        await updateDoc("members", referenceId, {
           status: "ACTIVE",
           receipt,
           paidAt: admin.firestore.FieldValue.serverTimestamp()
         });
 
-        console.log("🟢 MEMBER ACTIVATED:", phone);
+        console.log("🟢 MEMBER ACTIVATED:", referenceId);
       }
 
       // 🔵 JERSEY
